@@ -1,26 +1,53 @@
 import json
 import re
 from collections import Counter
+from pathlib import Path
 
-paths, ips, total = Counter(), set(), 0
-with open("/app/access.log") as f:
-    for line in f:
-        line = line.strip()
-        if not line:
-            continue
-        total += 1
-        ips.add(line.split()[0])
-        m = re.search(r'"(?:GET|POST|PUT|DELETE|HEAD|PATCH) (\S+) ', line)
-        if m:
-            paths[m.group(1)] += 1
+LOG_PATH = Path("/app/access.log")
+REPORT_PATH = Path("/app/report.json")
+REQUEST_RE = re.compile(r'"(?:GET|POST|PUT|DELETE|HEAD|PATCH|OPTIONS)\s+(\S+)\s+HTTP/[^"]+"')
 
-with open("/app/report.json", "w") as out:
-    json.dump(
-        {
-            "total_requests": total,
-            "unique_ips": len(ips),
-            "top_path": paths.most_common(1)[0][0],
-        },
-        out,
+
+total_requests = 0
+ips = set()
+paths = Counter()
+first_reached_best_order = {}
+current_best = 0
+reach_order = 0
+
+for line in LOG_PATH.read_text().splitlines():
+    if not line.strip():
+        continue
+
+    total_requests += 1
+    parts = line.split()
+    if parts:
+        ips.add(parts[0])
+
+    match = REQUEST_RE.search(line)
+    if match:
+        path = match.group(1)
+        paths[path] += 1
+
+        if paths[path] > current_best:
+            current_best = paths[path]
+            reach_order += 1
+            first_reached_best_order[path] = reach_order
+        elif paths[path] == current_best and path not in first_reached_best_order:
+            reach_order += 1
+            first_reached_best_order[path] = reach_order
+
+if not paths:
+    top_path = None
+else:
+    top_count = max(paths.values())
+    top_path = min(
+        (path for path, count in paths.items() if count == top_count),
+        key=lambda path: first_reached_best_order[path],
     )
-print("wrote /app/report.json")
+
+REPORT_PATH.write_text(json.dumps({
+    "total_requests": total_requests,
+    "unique_ips": len(ips),
+    "top_path": top_path,
+}, sort_keys=True))
